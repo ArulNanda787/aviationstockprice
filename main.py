@@ -35,6 +35,7 @@ def sensitivity_index(airline):
     pca = PCA(n_components=1)
     pca.fit(x)
     sensitivity_index = pca.transform(x)
+    explained_variance_ratio = pca.explained_variance_ratio_
     loadings = np.sqrt(pca.explained_variance_) * pca.components_.T
     loadings_df = pd.DataFrame(loadings, columns=["PC1"], index=df.columns[3:])
     loadings_df = loadings_df.round(3)
@@ -47,7 +48,7 @@ def sensitivity_index(airline):
     df_out['Year'] = pd.to_datetime(df_out['Year'])
     df_out = df_out.sort_values('Year').reset_index(drop=True)
     df_out['seq_index'] = range(len(df_out))
-    return df_out, top3_df
+    return df_out, top3_df,explained_variance_ratio
 
 
 def plot_seasonal_decomposition(ts, period=12):
@@ -171,9 +172,19 @@ def plot_price(df, forecast_index, forecast_mean, fitted_values):
     plt.tight_layout()
     plt.show()
 
+def model_metrics(df,best_model):
+    y_true = df['Price'][best_model.loglikelihood_burn:]  # skip initial NaNs
+    y_pred = best_model.fittedvalues[best_model.loglikelihood_burn:]
+
+    mae = mean_absolute_error(y_true, y_pred)
+    rmse = np.sqrt(mean_squared_error(y_true, y_pred))
+    mape = np.mean(np.abs((y_true - y_pred)/y_true)) * 100
+
+    print(f"MAE: {mae:.3f}, RMSE: {rmse:.3f}, MAPE: {mape:.2f}%")
+
 
 def time_series(airline):
-    df, _ = sensitivity_index(airline)
+    df, _,_ = sensitivity_index(airline)
     ts = pd.Series(df['Price'].values, index=df['seq_index'])
 
     # Decomposition plot (only if long enough)
@@ -211,10 +222,20 @@ def time_series(airline):
 
     forecast_index = np.arange(len(df), len(df) + len(forecast_mean))
     plot_price(df, forecast_index, forecast_mean, fitted_values)
+    # Print summary
+    print("\n=== Price Forecast Summary ===")
+    print(f"Last actual price: {df['Price'].iloc[-1]:.2f}")
+    print(f"First forecasted price: {forecast_mean.iloc[0]:.2f}")
+    print(f"Last forecasted price: {forecast_mean.iloc[-1]:.2f}")
+    print(f"\nForecasted prices:")
+    for i, val in enumerate(forecast_mean, 1):
+        print(f"  Step {i}: {val:.2f}")
+    model_metrics(df,best_model)
 
 
 def Airline(airline):
-    df, top3_df = sensitivity_index(airline)
+    df, top3_df,explained_variance_ratio = sensitivity_index(airline)
+    print("Explained variance ratio:\n", explained_variance_ratio)
     print("Top 3 loadings:\n", top3_df)
     time_series(airline)
 
