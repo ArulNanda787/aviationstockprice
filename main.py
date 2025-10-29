@@ -12,6 +12,8 @@ from pmdarima import auto_arima
 import itertools
 from tqdm.notebook import tqdm
 
+import warnings
+warnings.filterwarnings("ignore")
 
 def import_and_clean_data(airline):
     df = pd.read_csv(f"{airline}.csv")
@@ -32,22 +34,23 @@ def import_and_clean_data(airline):
 def sensitivity_index(airline):
     x, df = import_and_clean_data(airline)
     # PCA for Sensitivity Index
-    pca = PCA(n_components=1)
+    pca = PCA(0.9)
     pca.fit(x)
-    sensitivity_index = pca.transform(x)
+    pca_data = pca.transform(x)
     explained_variance_ratio = pca.explained_variance_ratio_
     loadings = np.sqrt(pca.explained_variance_) * pca.components_.T
-    loadings_df = pd.DataFrame(loadings, columns=["PC1"], index=df.columns[3:])
+    loadings_df = pd.DataFrame(loadings, columns=["PC"+f"{i+1}" for i in range(len(explained_variance_ratio))], index=df.columns[3:])
     loadings_df = loadings_df.round(3)
     top3_df = loadings_df.nlargest(3, 'PC1')
-    df_out = pd.DataFrame({
-        "Year": df['Year'],
-        "Price": df['Price'],
-        "SI": np.array(sensitivity_index).ravel()
-    })
+    pc_df = pd.DataFrame(
+    pca_data,
+    columns=[f"PC{i+1}" for i in range(pca_data.shape[1])]
+    )
+    df_out = pd.concat([df[['Year', 'Price']].reset_index(drop=True), pc_df], axis=1)
     df_out['Year'] = pd.to_datetime(df_out['Year'])
     df_out = df_out.sort_values('Year').reset_index(drop=True)
     df_out['seq_index'] = range(len(df_out))
+    #df_out : year, price, pc1,pc2,...,seq_index
     return df_out, top3_df,explained_variance_ratio
 
 
@@ -142,19 +145,29 @@ def optimize_SARIMAX(parameters_list, d, D, s, endog, exog=None):
     return result_df
 
 
-def forecasting_seasonality_index(df, steps=8):
-    # Use pmdarima to auto-select ARIMA for SI, then refit a SARIMAX and forecast SI
-    # auto_arima returns an object with .order and .seasonal_order
-    si_arima = auto_arima(df['SI'], seasonal=True, m=12, trace=False, error_action='ignore', suppress_warnings=True)
-    order = si_arima.order
-    seasonal_order = si_arima.seasonal_order
+def forecast_pca_exog(df, steps=8):
+    """
+    Forecast each PCA component (exogenous variable) separately using auto_arima.
+    Returns np.array of shape (steps, num_PCs).
+    """
+    exog = df.iloc[:, 2:-1]  # all PC columns
+    future_pcs = []
 
-    si_model = SARIMAX(df['SI'], order=order, seasonal_order=seasonal_order,
-                       enforce_stationarity=False, enforce_invertibility=False).fit(disp=False)
+    for col in exog.columns:
+        model_pc = auto_arima(
+            exog[col],
+            seasonal=True,
+            m=12,
+            trace=False,
+            error_action='ignore',
+            suppress_warnings=True
+        )
+        pc_forecast = model_pc.predict(n_periods=steps)
+        future_pcs.append(pc_forecast)
 
-    si_forecast = si_model.get_forecast(steps=steps)
-    si_forecast_values = si_forecast.predicted_mean.values.reshape(-1, 1)
-    return si_forecast_values
+    # shape (steps, n_PCs)
+    exog_future = np.column_stack(future_pcs)
+    return exog_future
 
 
 def plot_price(df, forecast_index, forecast_mean, fitted_values):
@@ -180,10 +193,9 @@ def model_metrics(df,best_model):
     rmse = np.sqrt(mean_squared_error(y_true, y_pred))
     mape = np.mean(np.abs((y_true - y_pred)/y_true)) * 100
 
-    print(f"MAE: {mae:.3f}, RMSE: {rmse:.3f}, MAPE: {mape:.2f}%")
+    return {"MAE": mae, "RMSE": rmse, "MAPE": mape}
 
-
-def time_series(airline):
+def time_series(airline,forecast_periods):
     df, _,_ = sensitivity_index(airline)
     ts = pd.Series(df['Price'].values, index=df['seq_index'])
 
@@ -198,7 +210,7 @@ def time_series(airline):
     # Grid search for (p,q,P,Q)
     p = P = q = Q = range(0, 3)
     parameters = list(itertools.product(p, q, P, Q))
-    result_table = optimize_SARIMAX(parameters, d=d, D=D, s=12, endog=df['Price'], exog=df[['SI']])
+    result_table = optimize_SARIMAX(parameters, d=d, D=D, s=12, endog=df['Price'], exog=df.iloc[:,2:-1])
 
     if result_table.empty:
         raise ValueError("No SARIMAX models converged in optimize_SARIMAX. Try smaller search space or change data.")
@@ -206,38 +218,62 @@ def time_series(airline):
     bestvals = result_table.iloc[0, 0]
     p, q, P, Q = bestvals
 
-    best_model = SARIMAX(endog=df['Price'], exog=df[['SI']],
+    best_model = SARIMAX(endog=df['Price'], exog=df.iloc[:,2:-1],
                          order=(p, d, q),
                          seasonal_order=(P, D, Q, 12),
                          enforce_stationarity=False,
                          enforce_invertibility=False).fit(disp=False)
 
-    si_forecast_values = forecasting_seasonality_index(df, steps=8)
+ # Forecast each PCA exog for the next n months
+    exog_future = forecast_pca_exog(df, steps=forecast_periods)
+
     fitted_values = best_model.fittedvalues
-    # Set a few initial values to NaN for alignment if needed
     fitted_values.iloc[:max(5, int(len(fitted_values) * 0.05))] = np.NaN
 
-    forecast = best_model.get_forecast(steps=8, exog=si_forecast_values)
+    forecast = best_model.get_forecast(steps=forecast_periods, exog=exog_future)
     forecast_mean = forecast.predicted_mean
 
     forecast_index = np.arange(len(df), len(df) + len(forecast_mean))
     plot_price(df, forecast_index, forecast_mean, fitted_values)
     # Print summary
-    print("\n=== Price Forecast Summary ===")
-    print(f"Last actual price: {df['Price'].iloc[-1]:.2f}")
-    print(f"First forecasted price: {forecast_mean.iloc[0]:.2f}")
-    print(f"Last forecasted price: {forecast_mean.iloc[-1]:.2f}")
-    print(f"\nForecasted prices:")
-    for i, val in enumerate(forecast_mean, 1):
-        print(f"  Step {i}: {val:.2f}")
-    model_metrics(df,best_model)
+    forecast_summary = {
+    "Last actual price": df['Price'].iloc[-1],
+    "First forecasted price": forecast_mean.iloc[0],
+    "Last forecasted price": forecast_mean.iloc[-1],
+    "Forecasted values": forecast_mean.tolist()
+    }
+    metrics = model_metrics(df,best_model)
+    return forecast_summary, forecast_index, forecast_mean, fitted_values, df, best_model, metrics
 
 
-def Airline(airline):
-    df, top3_df,explained_variance_ratio = sensitivity_index(airline)
-    print("Explained variance ratio:\n", explained_variance_ratio)
-    print("Top 3 loadings:\n", top3_df)
-    time_series(airline)
+def Airline(airline, forecast_periods):
+    df, top3_df, explained_variance_ratio = sensitivity_index(airline)
+    forecast_summary, forecast_index, forecast_mean, fitted_values, df, best_model, metrics = time_series(airline, forecast_periods)
+
+    # Create Figures for Streamlit
+    fig_forecast, ax1 = plt.subplots(figsize=(10, 5))
+    ax1.plot(df.index, df['Price'], label='Actual Price', linewidth=2)
+    ax1.plot(df.index, fitted_values, label='Fitted', linestyle='--')
+    ax1.plot(forecast_index, forecast_mean, label='Forecast', color='red', marker='o')
+    ax1.legend()
+    ax1.set_title('Forecasted vs Actual Prices')
+    plt.tight_layout()
+
+    # Decomposition Plot
+    ts = pd.Series(df['Price'].values, index=df['seq_index'])
+    if len(ts) >= 24:
+        result = seasonal_decompose(ts, model='multiplicative', period=12)
+        fig_decomp, axes = plt.subplots(2, 2, figsize=(12, 6))
+        axes[0, 0].plot(ts); axes[0, 0].set_title("Original")
+        axes[0, 1].plot(result.trend); axes[0, 1].set_title("Trend")
+        axes[1, 0].plot(result.seasonal); axes[1, 0].set_title("Seasonal")
+        axes[1, 1].plot(result.resid); axes[1, 1].set_title("Residual")
+        plt.tight_layout()
+    else:
+        fig_decomp = None
+
+    return top3_df, explained_variance_ratio, fig_forecast, fig_decomp, metrics, pd.DataFrame(forecast_summary)
+
 
 if __name__ == "__main__":
-    Airline("american")
+    Airline("american",8)
