@@ -1,7 +1,13 @@
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 from main import Airline  # your backend function
+from statsmodels.tsa.seasonal import seasonal_decompose
+from pathlib import Path
+import base64
 
 # --- PAGE CONFIG ---
 st.set_page_config(
@@ -23,7 +29,7 @@ st.markdown("""
 
 /* HEADER */
 .header {
-    background: radial-gradient(circle at top left, #003566, #001d3d 80%);
+    background: linear-gradient(135deg, #003566, #ffffff 50%, #c1121f);
     color: #ffffff;
     text-align: center;
     padding: 45px 0;
@@ -31,18 +37,26 @@ st.markdown("""
     box-shadow: 0 10px 35px rgba(0, 21, 41, 0.4);
     margin-bottom: 50px;
     transition: transform 0.3s ease;
+    border: 2px solid rgba(255,255,255,0.3);
 }
-.header:hover { transform: translateY(-3px); }
+
+.header:hover {
+    transform: translateY(-3px);
+}
+
 .header h1 {
     font-weight: 700;
     font-size: 2.5rem;
     letter-spacing: 0.5px;
-    text-shadow: 0px 0px 12px rgba(255,255,255,0.25);
+    text-shadow: 0px 0px 10px rgba(0,0,0,0.3);
+    color: #001d3d;
 }
+
 .header p {
     font-size: 1.05rem;
-    color: #cfe2ff;
+    color: #001d3d;
     margin-top: 10px;
+    font-weight: 500;
 }
 
 /* INPUT FIELD */
@@ -152,13 +166,12 @@ h3 {
 # --- HEADER ---
 st.markdown("""
 <div class='header'>
-    <h1>✈️ American Airlines Forecast Dashboard</h1>
-    <p>AI-powered forecasting using PCA & SARIMAX with time series decomposition</p>
+    <h1>✈️ American Airlines Forecast</h1>
 </div>
 """, unsafe_allow_html=True)
 
 # --- INPUT SECTION ---
-st.markdown("<div class='card'>", unsafe_allow_html=True)
+#st.markdown("<div class='card'>", unsafe_allow_html=True)
 st.markdown("<h3>📅 Enter Forecast Period</h3>", unsafe_allow_html=True)
 steps = st.number_input(
     "Enter number of months to forecast ahead:",
@@ -176,7 +189,7 @@ if run_button:
     with st.spinner("Running time series decomposition and forecast... Please wait ⏳"):
         try:
             # Backend returns 6 values
-            top3_df, explained_variance_ratio, fig_forecast, fig_decomp, metrics, forecast_summary = Airline("american", steps)
+            ts,loadings_df, explained_variance_ratio, fig_forecast, metrics, forecast_summary = Airline("american", steps)
 
             mae = metrics.get("MAE", 0)
             rmse = metrics.get("RMSE", 0)
@@ -190,7 +203,24 @@ if run_button:
     # PCA Factors
     st.markdown("<div class='card'>", unsafe_allow_html=True)
     st.markdown("<h3>🔍 Top 3 PCA Sensitivity Factors</h3>", unsafe_allow_html=True)
-    st.dataframe(top3_df.style.background_gradient(cmap="Blues").format(precision=3))
+    def highlight_top3(data):
+            """
+            Highlight top 3 values in each column with gradient blue
+            """
+            df_style = pd.DataFrame('', index=data.index, columns=data.columns)
+            
+            for col in data.columns:
+                # Get top 3 values for this column
+                top3_values = data[col].nlargest(3)
+                
+                # Create gradient for top 3
+                for idx, (index, value) in enumerate(top3_values.items()):
+                    # Gradient from darkest to lightest blue
+                    intensity = 1 - (idx * 0.3)  # 1.0, 0.7, 0.4
+                    df_style.loc[index, col] = f'background-color: rgba(33, 150, 243, {intensity})'
+        
+            return df_style
+    st.dataframe(loadings_df.style.apply(highlight_top3, axis=None).format(precision=3))    
     st.markdown("</div>", unsafe_allow_html=True)
 
     # PCA Explained Variance
@@ -214,11 +244,48 @@ if run_button:
     st.markdown("</div>", unsafe_allow_html=True)
 
     # Time Series Decomposition
-    st.markdown("<div class='card'>", unsafe_allow_html=True)
-    st.markdown("<h3>🧩 Time Series Decomposition</h3>", unsafe_allow_html=True)
-    st.markdown("Decomposing the original data into **Trend**, **Seasonal**, and **Residual** components helps reveal hidden patterns before forecasting.")
-    st.pyplot(fig_decomp)
-    st.markdown("</div>", unsafe_allow_html=True)
+    # Guard: seasonal_decompose needs at least 2*period points
+    period = 12
+    if len(ts) >= 2 * period:
+        result = seasonal_decompose(ts, model='multiplicative', period=period)
+
+        # Make a tall, vertical figure (one below another)
+        fig, axes = plt.subplots(4, 1, figsize=(16, 14), sharex=True)
+        plt.subplots_adjust(hspace=0.4)
+
+        # Original series
+        axes[0].plot(ts, linewidth=2)
+        axes[0].set_title('Original Time Series')
+        axes[0].set_ylabel('Value')
+        axes[0].grid(alpha=0.3)
+
+        # Trend
+        axes[1].plot(result.trend, linewidth=2, color='tab:orange')
+        axes[1].set_title('Trend Component')
+        axes[1].set_ylabel('Trend')
+        axes[1].grid(alpha=0.3)
+
+        # Seasonal
+        axes[2].plot(result.seasonal, linewidth=2, color='tab:green')
+        axes[2].set_title('Seasonal Component')
+        axes[2].set_ylabel('Seasonality')
+        axes[2].grid(alpha=0.3)
+
+        # Residual
+        axes[3].plot(result.resid, linewidth=2, color='tab:red')
+        axes[3].set_title('Residual Component')
+        axes[3].set_ylabel('Residual')
+        axes[3].set_xlabel('Time')
+        axes[3].grid(alpha=0.3)
+
+        # IMPORTANT: don't use plt.show() in Streamlit; pass the fig to st.pyplot
+        st.markdown("<div class='card'>", unsafe_allow_html=True)
+        st.markdown("<h3>🧩 Time Series Decomposition</h3>", unsafe_allow_html=True)
+        st.markdown("Decomposing the original data into <b>Trend</b>, <b>Seasonal</b>, and <b>Residual</b> components helps reveal hidden patterns before forecasting.", unsafe_allow_html=True)
+        st.pyplot(fig)
+        st.markdown("</div>", unsafe_allow_html=True)
+    else:
+        st.warning(f"Need at least {2*period} observations for seasonal decomposition (have {len(ts)}).")
 
     # Forecast Visualization
     st.markdown("<div class='card'>", unsafe_allow_html=True)
@@ -229,15 +296,15 @@ if run_button:
     # Forecasted Data
     st.markdown("<div class='card'>", unsafe_allow_html=True)
     st.markdown("<h3>🧾 Forecasted Price Data</h3>", unsafe_allow_html=True)
-    st.dataframe(forecast_summary.style.highlight_max(color="lightgreen", axis=0))
+    st.dataframe(forecast_summary)
     st.markdown("</div>", unsafe_allow_html=True)
 
 else:
     st.info("💡 Enter a forecast period and click **Run Forecast** to start analysis.")
 
 # --- FOOTER ---
-st.markdown("""
-<div class='footer'>
-    © 2025 Aviation Stock Forecast
-</div>
-""", unsafe_allow_html=True)
+#st.markdown("""
+#<div class='footer'>
+#    © 2025 Aviation Stock Forecast
+#</div>
+#""", unsafe_allow_html=True)

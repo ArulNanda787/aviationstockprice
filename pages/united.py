@@ -11,7 +11,7 @@ import base64
 
 # --- PAGE CONFIG ---
 st.set_page_config(
-    page_title="Delta Airlines Forecast ✈️",
+    page_title="United Airlines Forecast ✈️",
     page_icon="✈️",
     layout="wide",
     initial_sidebar_state="collapsed"
@@ -30,7 +30,7 @@ st.markdown("""
 /* HEADER */
 /* HEADER */
 .header {
-    background: linear-gradient(135deg, #E3132C, #9B1631, #003268);
+    background: linear-gradient(135deg, #000000, #0A46AF 50%, #CF0200);
     color: #ffffff;
     text-align: center;
     padding: 45px 0;
@@ -38,7 +38,7 @@ st.markdown("""
     box-shadow: 0 10px 35px rgba(0, 21, 41, 0.4);
     margin-bottom: 50px;
     transition: transform 0.3s ease;
-    border: 2px solid rgba(255,255,255,0.25);
+    border: 2px solid rgba(255,255,255,0.3);
 }
 
 .header:hover {
@@ -49,13 +49,13 @@ st.markdown("""
     font-weight: 700;
     font-size: 2.5rem;
     letter-spacing: 0.5px;
+    text-shadow: 0px 0px 12px rgba(255,255,255,0.25);
     color: #ffffff;
-    text-shadow: 0 2px 8px rgba(0,0,0,0.25);
 }
 
 .header p {
     font-size: 1.05rem;
-    color: #f1f1f1;
+    color: #e6e6e6;
     margin-top: 10px;
     font-weight: 500;
 }
@@ -167,7 +167,7 @@ h3 {
 # --- HEADER ---
 st.markdown("""
 <div class='header'>
-    <h1>✈️ Delta Airlines Forecast</h1>
+    <h1>✈️ United Airlines Forecast</h1>
 </div>
 """, unsafe_allow_html=True)
 
@@ -190,7 +190,7 @@ if run_button:
     with st.spinner("Running time series decomposition and forecast... Please wait ⏳"):
         try:
             # Backend returns 6 values
-            ts,loadings_df, explained_variance_ratio, fig_forecast, metrics, forecast_summary = Airline("delta", steps)
+            ts,loadings_df, explained_variance_ratio, fig_forecast, metrics, forecast_summary = Airline("united", steps)
 
             mae = metrics.get("MAE", 0)
             rmse = metrics.get("RMSE", 0)
