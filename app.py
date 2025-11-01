@@ -16,13 +16,11 @@ st.markdown("""
             color: #212529;
             font-family: 'Poppins', sans-serif;
         }
-
         h1, h2, h3, h4 {
             color: #0d1b2a !important;
             font-weight: 600;
             text-align: center;
         }
-
         .airline-card {
             background: rgba(255, 255, 255, 0.97);
             border-radius: 18px;
@@ -32,12 +30,10 @@ st.markdown("""
             box-shadow: 0px 5px 15px rgba(0,0,0,0.1);
             margin-bottom: 25px;
         }
-
         .airline-card:hover {
             transform: translateY(-6px);
             box-shadow: 0px 10px 25px rgba(0,0,0,0.25);
         }
-
         .airline-logo {
             width: 150px;
             height: 150px;
@@ -48,8 +44,6 @@ st.markdown("""
             padding: 10px;
             box-shadow: 0px 2px 6px rgba(0,0,0,0.1);
         }
-
-        /* BUTTON STYLING */
         div[data-testid="stButton"] > button {
             background: linear-gradient(145deg, #212529, #343a40);
             color: #f8f9fa;
@@ -63,15 +57,12 @@ st.markdown("""
             text-align: center;
             margin-top: 15px;
         }
-
         div[data-testid="stButton"] > button:hover {
             background: linear-gradient(145deg, #000000, #343a40);
             color: #00b4d8;
             transform: scale(1.08);
             box-shadow: 0px 10px 25px rgba(0,0,0,0.4);
         }
-
-        /* Center cards evenly */
         [data-testid="column"] {
             display: flex;
             justify-content: center;
@@ -100,7 +91,6 @@ for i, (name, (img_path, page)) in enumerate(airlines.items()):
         try:
             with open(img_path, "rb") as img_file:
                 encoded = base64.b64encode(img_file.read()).decode()
-
             st.markdown(f"""
             <div class="airline-card">
                 <img src="data:image/png;base64,{encoded}" class="airline-logo">
@@ -110,10 +100,22 @@ for i, (name, (img_path, page)) in enumerate(airlines.items()):
         except:
             st.error(f"⚠️ Could not load {img_path}")
 
-        # --- BUTTON BELOW IMAGE ---
-        button_clicked = st.button(f"View {name}", key=name)
-        if button_clicked:
-            st.switch_page(f"pages/{page}.py")
+        # --- SELECT AIRLINE BUTTON ---
+        if st.button(f"Select {name}", key=name):
+            st.session_state["selected_airline"] = name
+            st.success(f"{name} selected!")
 
+# --- NEXT STEP BUTTONS ---
 st.markdown("<hr>", unsafe_allow_html=True)
-st.info("👆 Select an airline above to continue.")
+
+if "selected_airline" in st.session_state:
+    st.subheader(f"Selected Airline: {st.session_state['selected_airline']}")
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("Use one model"):
+            st.switch_page("pages/one_model.py")
+    with col2:
+        if st.button("Compare models"):
+            st.switch_page("pages/compare_models.py")
+else:
+    st.info("👆 Select an airline first to continue.")

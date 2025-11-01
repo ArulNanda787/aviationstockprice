@@ -283,7 +283,7 @@ def Airline(airline, forecast_periods):
     plt.tight_layout()
     
 
-    return ts, loadings_df, explained_variance_ratio, fig_forecast, metrics, forecast_summary
+    return ts, loadings_df, explained_variance_ratio, fig_forecast, metrics, forecast_summary, df, fitted_values
 
 
 if __name__ == "__main__":
