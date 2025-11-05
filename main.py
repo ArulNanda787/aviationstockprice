@@ -11,6 +11,7 @@ from sklearn.metrics import mean_absolute_error, mean_squared_error
 from pmdarima import auto_arima
 import itertools
 from tqdm.notebook import tqdm
+from prophet import Prophet
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -268,23 +269,91 @@ def time_series(airline,forecast_periods):
     return ts, forecast_summary, forecast_index, forecast_mean, fitted_values, df, best_model, metrics
 
 
-def Airline(airline, forecast_periods):
-    df, loadings_df, explained_variance_ratio = sensitivity_index(airline)
-    df['seq_index'] = range(len(df))
-    ts, forecast_summary, forecast_index, forecast_mean, fitted_values, df, best_model, metrics = time_series(airline, forecast_periods)
+def prophet_forecast(df, forecast_periods):
+    prophet_df = df[["Date", "Price"]].rename(columns={"Date": "ds", "Price": "y"})
 
-    # Create Figures for Streamlit
-    fig_forecast, ax1 = plt.subplots(figsize=(10, 5))
-    ax1.plot(df['Date'], df['Price'], label='Actual Price', linewidth=2)  # Changed from df.index
-    ax1.plot(df['Date'], fitted_values, label='Fitted', linestyle='--')  # Changed from df.index
-    ax1.plot(forecast_index, forecast_mean, label='Forecast', color='red', marker='o')
-    ax1.legend()
-    ax1.set_title('Forecasted vs Actual Prices')
-    plt.tight_layout()
+    exog_cols = [col for col in df.columns if col.startswith("PC")]
+    for col in exog_cols:
+        prophet_df[col] = df[col].values
+
+    model = Prophet(
+        yearly_seasonality=True,
+        weekly_seasonality=False,
+        daily_seasonality=False,
+        changepoint_prior_scale=0.3
+    )
+
+    for col in exog_cols:
+        model.add_regressor(col)
+
+    model.fit(prophet_df)
     
+    future = model.make_future_dataframe(periods=forecast_periods, freq="MS")
 
-    return ts, loadings_df, explained_variance_ratio, fig_forecast, metrics, forecast_summary, df, fitted_values
+    #Forecast exogenous PCA components (since we need future values)
+    exog_future = forecast_pca_exog(df, steps=forecast_periods)
+    for i, col in enumerate(exog_cols):
+        future[col] = np.concatenate([df[col].values, exog_future[:, i]])
+
+    forecast = model.predict(future)
+    
+    plt.figure(figsize=(15, 7.5))
+    plt.plot(df["Date"], df["Price"], label="Actual Price", linewidth=2, marker="o", markersize=4)
+    plt.plot(forecast["ds"], forecast["yhat"], label="Prophet Forecast", color="red", linewidth=2, marker="s", markersize=5)
+    plt.fill_between(forecast["ds"], forecast["yhat_lower"], forecast["yhat_upper"],
+                     color="pink", alpha=0.3, label="Confidence Interval")
+    plt.xlabel("Time")
+    plt.ylabel("Price")
+    plt.title("Prophet (with PCA Regressors): Actual vs Forecasted Price")
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+
+    y_true = prophet_df["y"].values
+    y_pred = forecast["yhat"][:len(y_true)].values
+
+    mae = mean_absolute_error(y_true, y_pred)
+    rmse = np.sqrt(mean_squared_error(y_true, y_pred))
+    mape = np.mean(np.abs((y_true - y_pred) / y_true)) * 100
+
+    metrics = {
+        "Model": "Prophet (with PCA Regressors)",
+        "MAE": mae,
+        "RMSE": rmse,
+        "MAPE": mape
+    }
+
+    forecast_summary = forecast[["ds", "yhat", "yhat_lower", "yhat_upper"]].rename(columns={"ds": "Date"})
+
+    return model, forecast_summary, metrics
+
+
+
+
+def Airline(airline, forecast_periods, model="SARIMAX"):
+    df, loadings_df, explained_variance_ratio = sensitivity_index(airline)
+    if model.upper() == "SARIMAX":
+        ts, forecast_summary, forecast_index, forecast_mean, fitted_values, df, best_model, metrics = time_series(airline, forecast_periods)
+        return {
+            "Model": "SARIMAX",
+            "Forecast": forecast_summary,
+            "Metrics": metrics,
+            "Loadings": loadings_df,
+            "ExplainedVar": explained_variance_ratio,
+        }
+    elif model.upper() == "PROPHET":
+        model_prophet, forecast_summary, metrics = prophet_forecast(df, forecast_periods)
+        return {
+            "Model": "Prophet",
+            "Forecast": forecast_summary,
+            "Metrics": metrics,
+            "Loadings": loadings_df,
+            "ExplainedVar": explained_variance_ratio,
+        }
+    else:
+        raise ValueError("Invalid model choice. Choose either 'SARIMAX' or 'Prophet'.")
 
 
 if __name__ == "__main__":
-    Airline("american",8)
+    Airline("american",8,model="PROPHET")
