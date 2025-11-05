@@ -12,6 +12,7 @@ from pmdarima import auto_arima
 import itertools
 from tqdm.notebook import tqdm
 from prophet import Prophet
+from statsmodels.tsa.holtwinters import ExponentialSmoothing
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -328,7 +329,48 @@ def prophet_forecast(df, forecast_periods):
 
     return model, forecast_summary, metrics
 
+def detect_model_type(series):
+    mean_val, std_val = series.mean(), series.std()
+    ratio = std_val / mean_val
+    if ratio > 0.3:
+        trend_type, seasonal_type = "mul", "mul"
+    else:
+        trend_type, seasonal_type = "add", "add"
+    print(f"Detected model type: trend='{trend_type}', seasonal='{seasonal_type}' (ratio={ratio:.2f})")
+    return trend_type, seasonal_type
 
+
+def holt_winters_forecast(airline, forecast_periods=8):
+    df, loadings_df, explained_variance_ratio = sensitivity_index(airline)
+    ts = pd.Series(df['Price'].values, index=df['Date'])
+    trend_type, seasonal_type = detect_model_type(ts)
+    model = ExponentialSmoothing(ts, trend=trend_type, seasonal=seasonal_type, seasonal_periods=12).fit(optimized=True)
+    fitted_values = model.fittedvalues
+    forecast = model.forecast(forecast_periods)
+    forecast_index = pd.date_range(start=df['Date'].iloc[-1] + pd.DateOffset(months=1), periods=forecast_periods, freq='MS')
+
+    # Plot
+    plt.figure(figsize=(15, 7))
+    plt.plot(ts.index, ts, label='Actual', linewidth=2, marker='o')
+    plt.plot(ts.index, fitted_values, label='Fitted', linestyle='--', linewidth=2)
+    plt.plot(forecast_index, forecast, label='Forecast', color='red', marker='s', linewidth=2)
+    plt.axvline(x=ts.index[-1], color='black', linestyle='--', linewidth=1.2, alpha=0.7)
+    plt.title("Holt-Winters Forecast (Auto Add/Mul Detection)")
+    plt.xlabel("Time")
+    plt.ylabel("Price")
+    plt.legend()
+    plt.grid(alpha=0.3)
+    plt.tight_layout()
+    plt.show()
+
+    # Metrics
+    mae = mean_absolute_error(ts, fitted_values)
+    rmse = np.sqrt(mean_squared_error(ts, fitted_values))
+    mape = np.mean(np.abs((ts - fitted_values) / ts)) * 100
+    metrics = {"MAE": mae, "RMSE": rmse, "MAPE": mape}
+
+    forecast_summary = pd.DataFrame({"Date": forecast_index, "Forecasted Price": forecast.values})
+    return df, forecast_summary, metrics, loadings_df, explained_variance_ratio, trend_type, seasonal_type
 
 
 def Airline(airline, forecast_periods, model="SARIMAX"):
@@ -351,9 +393,18 @@ def Airline(airline, forecast_periods, model="SARIMAX"):
             "Loadings": loadings_df,
             "ExplainedVar": explained_variance_ratio,
         }
+    elif model.upper() == "HOLT-WINTERS":
+        df, forecast_summary, metrics, loadings_df, explained_variance_ratio, trend_type, seasonal_type = holt_winters_forecast(airline, forecast_periods)
+        return {"Model": "Holt-Winters", 
+                "Forecast": forecast_summary, 
+                "Metrics": metrics,
+                "Trend": trend_type, 
+                "Seasonal": seasonal_type,
+                "Loadings": loadings_df,
+                "ExplainedVar": explained_variance_ratio}
     else:
-        raise ValueError("Invalid model choice. Choose either 'SARIMAX' or 'Prophet'.")
+        raise ValueError("Invalid model choice. Choose either 'SARIMAX' , 'Prophet', or 'HOLT-WINTERS'.")
 
 
 if __name__ == "__main__":
-    Airline("american",8,model="PROPHET")
+    Airline("american",8,model="HOLT-WINTERS")
