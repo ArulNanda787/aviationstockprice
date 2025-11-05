@@ -2,6 +2,8 @@ import streamlit as st
 import matplotlib.pyplot as plt
 import pandas as pd
 from main import Airline  # ✅ Import your SARIMAX backend function
+from main import Airline, sensitivity_index, detect_model_type
+from statsmodels.tsa.holtwinters import ExponentialSmoothing
 import plotly.graph_objects as go
 
 
@@ -77,9 +79,12 @@ if selected_model:
         if airline == "No airline selected":
             st.error("Please select an airline first on the main page.")
         else:
-            if selected_model == "SARIMAX":
+                        airline_key = str(airline).strip().lower()
+
+        if selected_model == "SARIMAX":
                 with st.spinner("Running SARIMAX model..."):
-                    ts, loadings_df, explained_variance_ratio, fig_forecast, metrics, forecast_summary, df, fitted_values = Airline("american", forecast_periods)
+                    ts, loadings_df, explained_variance_ratio, fig_forecast, metrics, forecast_summary, df, fitted_values = Airline(Airline(str(airline).strip().lower(), forecast_periods, model="SARIMAX")
+, forecast_periods)
 
                     st.subheader("📈 Forecast Visualization")
                     # Ensure datetime format for Plotly
@@ -165,8 +170,192 @@ if selected_model:
                     st.dataframe(forecast_summary, hide_index = True)
 
 
-            elif selected_model == "Prophet":
-                st.warning("🚧 Prophet model integration coming soon!")
+        elif selected_model == "Prophet":
+                    with st.spinner("Running Prophet model..."):
+                          
+                          airline_key = str(airline).strip().lower()
 
-            elif selected_model == "Exponential Smoothing":
-                st.warning("🚧 Exponential Smoothing model integration coming soon!")
+                    # Run unified gateway
+                    res = Airline(airline_key, forecast_periods, model="PROPHET")
+                    forecast_summary = res["Forecast"].copy()     # columns: Date, yhat, yhat_lower, yhat_upper
+                    metrics = res["Metrics"]
+
+                    # Actual data (for plotting)
+                    df, _, _ = sensitivity_index(airline_key)
+                    df["Date"] = pd.to_datetime(df["Date"])
+                    forecast_summary["Date"] = pd.to_datetime(forecast_summary["Date"])
+
+                    # Fitted values = in-sample Prophet yhat aligned to history dates
+                    fitted_map = forecast_summary.set_index("Date")["yhat"]
+                    fitted_values = df["Date"].map(fitted_map)
+
+                    # Only future rows for the forecast line
+                    future_mask = forecast_summary["Date"] > df["Date"].max()
+                    fc_future = forecast_summary.loc[future_mask].iloc[:forecast_periods].copy()
+                    fc_future.rename(columns={"yhat": "Forecasted Price"}, inplace=True)
+
+                    st.subheader("📈 Forecast Visualization")
+                    fig = go.Figure()
+
+                    # Actual prices
+                    fig.add_trace(go.Scatter(
+                        x=df["Date"], y=df["Price"],
+                        mode='lines+markers',
+                        name='Actual Price',
+                        line=dict(color='#2E86AB', width=2)
+                    ))
+
+                    # Fitted values (in-sample)
+                    fig.add_trace(go.Scatter(
+                        x=df["Date"], y=fitted_values,
+                        mode='lines',
+                        name='Fitted Values',
+                        line=dict(color='#82E0AA', dash='dash')
+                    ))
+
+                    # Forecasted values (future yhat)
+                    fig.add_trace(go.Scatter(
+                        x=fc_future["Date"], y=fc_future["Forecasted Price"],
+                        mode='lines+markers',
+                        name='Forecasted Price',
+                        line=dict(color='#E74C3C', width=2)
+                    ))
+
+                    # Vertical line at forecast start
+                    forecast_start_date = fc_future["Date"].iloc[0]
+                    fig.add_shape(
+                        type="line",
+                        x0=forecast_start_date,
+                        x1=forecast_start_date,
+                        y0=0, y1=1, yref="paper",
+                        line=dict(color="red", width=2, dash="dash")
+                    )
+                    fig.add_annotation(
+                        x=forecast_start_date, y=1, yref="paper",
+                        text="Forecast Start", showarrow=False, yshift=10,
+                        font=dict(color="red")
+                    )
+
+                    fig.update_layout(
+                        title="Prophet: Actual vs Fitted vs Forecasted Price",
+                        xaxis_title="Date",
+                        yaxis_title="Price",
+                        hovermode="x unified",
+                        template="plotly_white",
+                        legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01),
+                        height=500
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+
+                    # Metrics card
+                    st.markdown("<div class='card'>", unsafe_allow_html=True)
+                    st.markdown("<h3>📊 Model Performance Metrics</h3>", unsafe_allow_html=True)
+                    col1, col2, col3 = st.columns(3)
+                    mae = metrics.get("MAE", 0)
+                    rmse = metrics.get("RMSE", 0)
+                    mape = metrics.get("MAPE", 0)
+                    with col1: st.metric("MAE", f"${mae:.3f}")
+                    with col2: st.metric("RMSE", f"${rmse:.3f}")
+                    with col3: st.metric("MAPE", f"{mape:.2f}%")
+                    st.markdown("</div>", unsafe_allow_html=True)
+
+                    # Table in the same style
+                    st.subheader("📅 Forecasted Values")
+                    out = fc_future[["Date", "Forecasted Price"]].copy()
+                    out["Date"] = out["Date"].dt.date
+                    st.dataframe(out, hide_index=True)
+
+
+        elif selected_model == "Exponential Smoothing":
+                with st.spinner("Running Holt–Winters (Exponential Smoothing) model..."):
+                    airline_key = str(airline).strip().lower()
+
+                    # Unified gateway (returns forecast & metrics; we’ll compute fitted here for plotting)
+                    res = Airline(airline_key, forecast_periods, model="HOLT-WINTERS")
+                    forecast_summary = res["Forecast"].copy()  # columns: Date, Forecasted Price
+                    metrics = res["Metrics"]
+                    trend_type = res.get("Trend", "add")
+                    seasonal_type = res.get("Seasonal", "add")
+
+                    # Actual data + fitted
+                    df, _, _ = sensitivity_index(airline_key)
+                    df["Date"] = pd.to_datetime(df["Date"])
+                    forecast_summary["Date"] = pd.to_datetime(forecast_summary["Date"])
+
+                    # Refit quickly to get fitted values (same detected types)
+                    ts = pd.Series(df["Price"].values, index=df["Date"])
+                    hw_fit = ExponentialSmoothing(
+                        ts, trend=trend_type, seasonal=seasonal_type, seasonal_periods=12
+                    ).fit(optimized=True)
+                    fitted_values = hw_fit.fittedvalues
+
+                    st.subheader("📈 Forecast Visualization")
+                    fig = go.Figure()
+
+                    # Actual prices
+                    fig.add_trace(go.Scatter(
+                        x=df["Date"], y=df["Price"],
+                        mode='lines+markers',
+                        name='Actual Price',
+                        line=dict(color='#2E86AB', width=2)
+                    ))
+
+                    # Fitted values
+                    fig.add_trace(go.Scatter(
+                        x=df["Date"], y=fitted_values,
+                        mode='lines',
+                        name='Fitted Values',
+                        line=dict(color='#82E0AA', dash='dash')
+                    ))
+
+                    # Forecasted values
+                    fig.add_trace(go.Scatter(
+                        x=forecast_summary["Date"], y=forecast_summary["Forecasted Price"],
+                        mode='lines+markers',
+                        name='Forecasted Price',
+                        line=dict(color='#E74C3C', width=2)
+                    ))
+
+                    # Vertical line at forecast start
+                    forecast_start_date = forecast_summary["Date"].iloc[0]
+                    fig.add_shape(
+                        type="line",
+                        x0=forecast_start_date,
+                        x1=forecast_start_date,
+                        y0=0, y1=1, yref="paper",
+                        line=dict(color="red", width=2, dash="dash")
+                    )
+                    fig.add_annotation(
+                        x=forecast_start_date, y=1, yref="paper",
+                        text=f"Forecast Start ({trend_type}/{seasonal_type})",
+                        showarrow=False, yshift=10, font=dict(color="red")
+                    )
+
+                    fig.update_layout(
+                        title="Holt–Winters: Actual vs Fitted vs Forecasted Price",
+                        xaxis_title="Date",
+                        yaxis_title="Price",
+                        hovermode="x unified",
+                        template="plotly_white",
+                        legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01),
+                        height=500
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+
+                    # Metrics card
+                    st.markdown("<div class='card'>", unsafe_allow_html=True)
+                    st.markdown("<h3>📊 Model Performance Metrics</h3>", unsafe_allow_html=True)
+                    col1, col2, col3 = st.columns(3)
+                    mae = metrics.get("MAE", 0)
+                    rmse = metrics.get("RMSE", 0)
+                    mape = metrics.get("MAPE", 0)
+                    with col1: st.metric("MAE", f"${mae:.3f}")
+                    with col2: st.metric("RMSE", f"${rmse:.3f}")
+                    with col3: st.metric("MAPE", f"{mape:.2f}%")
+                    st.markdown("</div>", unsafe_allow_html=True)
+
+                    # Table in the same style
+                    st.subheader("📅 Forecasted Values")
+                    out = forecast_summary.copy()
+                    out["Date"] = out["Date"].dt.date
+                    st.dataframe(out, hide_index=True)

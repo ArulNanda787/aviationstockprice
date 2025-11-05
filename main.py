@@ -10,19 +10,80 @@ from statsmodels.tsa.stattools import adfuller
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 from pmdarima import auto_arima
 import itertools
-from tqdm.notebook import tqdm
+from tqdm import tqdm
 from prophet import Prophet
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
+import pathlib
+import re
+
 
 import warnings
 warnings.filterwarnings("ignore")
 
+# Point to where your CSVs actually live
+DATA_DIR = pathlib.Path(__file__).parent / "pages"   # <-- change to "." if CSVs are in repo root
+
+# Accept many possible UI labels and map to the actual filenames
+AIRLINE_ALIASES = {
+    "american": "american.csv",
+    "american airlines": "american.csv",
+    "aa": "american.csv",
+
+    "delta": "delta.csv",
+    "delta airlines": "delta.csv",
+    "delta air lines": "delta.csv",
+
+    "southwest": "southwest.csv",
+    "southwest airlines": "southwest.csv",
+
+    "united": "united.csv",
+    "united airlines": "united.csv",
+}
+
+def resolve_csv(name: str) -> pathlib.Path:
+    """
+    Normalizes a user-facing airline label into a concrete CSV path.
+    Tries aliases first, then smart fallbacks, then raises a clear error.
+    """
+    key = str(name).strip().lower()
+
+    # 1) direct alias hit
+    if key in AIRLINE_ALIASES:
+        return DATA_DIR / AIRLINE_ALIASES[key]
+
+    # 2) strip common suffixes and retry
+    key2 = (
+        key.replace("airlines", "")
+           .replace("air lines", "")
+           .strip()
+    )
+    if key2 in AIRLINE_ALIASES:
+        return DATA_DIR / AIRLINE_ALIASES[key2]
+
+    # 3) fallback: try "<key>.csv" and "<key2>.csv" directly
+    cand1 = DATA_DIR / f"{key}.csv"
+    if cand1.exists():
+        return cand1
+    cand2 = DATA_DIR / f"{key2}.csv"
+    if cand2.exists():
+        return cand2
+
+    # 4) give a helpful error
+    valid = sorted(set(AIRLINE_ALIASES.keys()))
+    raise FileNotFoundError(
+        f"No CSV for airline '{name}'. Looked in {DATA_DIR}. "
+        f"Try one of: {valid}"
+    )
+
+
 def import_and_clean_data(airline):
-    df = pd.read_csv(f"{airline}.csv")
+    csv_path = resolve_csv(airline)   # <-- use resolver
+    df = pd.read_csv(csv_path)
+
     # Convert everything to string, remove commas
     numeric_cols = df.columns[2:]  # Price + features
     for col in numeric_cols:
-        df[col] = df[col].astype(str).str.replace(",", "")  # remove commas
+        df[col] = df[col].astype(str).str.replace(",", "")
         df[col] = pd.to_numeric(df[col], errors='coerce')
     df['Year'] = pd.to_datetime(df['Year'], format="%Y")
     df['Month'] = pd.to_datetime(df['Month'], format="%m")
@@ -30,11 +91,12 @@ def import_and_clean_data(airline):
 
     # FIX: Only select numeric feature columns for PCA (exclude Year, Month, Date, Price)
     x = df.iloc[:, 3:].select_dtypes(include=[np.number])
-    
+
     # standardize
     standard = StandardScaler()
     x = standard.fit_transform(x)
     return x, df
+
 
 
 def sensitivity_index(airline):
@@ -218,7 +280,7 @@ def model_metrics(df,best_model):
 
     return {"MAE": mae, "RMSE": rmse, "MAPE": mape}
 
-def time_series(airline,forecast_periods):
+def time_series(airline,forecast_periods):   #
     df, _,_ = sensitivity_index(airline)
     ts = pd.Series(df['Price'].values, index=df['Date'])
     
