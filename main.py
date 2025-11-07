@@ -314,7 +314,7 @@ def time_series(airline,forecast_periods):   #
     exog_future = forecast_pca_exog(df, steps=forecast_periods)
 
     fitted_values = best_model.fittedvalues.copy()
-    fitted_values.iloc[:max(5, int(len(fitted_values) * 0.05))] = np.NaN
+    fitted_values.iloc[:max(5, int(len(fitted_values) * 0.05))] = np.nan
 
     forecast = best_model.get_forecast(steps=forecast_periods, exog=exog_future)
     forecast_mean = forecast.predicted_mean

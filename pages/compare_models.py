@@ -35,11 +35,11 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- Sidebar Inputs ---
+# --- Sidebar Inputs (keep airline here) ---
 with st.sidebar:
     st.header("⚙️ Settings")
     airline = st.selectbox("✈️ Select Airline", ["American", "Delta", "Southwest", "United"])
-    forecast_periods = st.number_input("📆 Forecast Periods (months)", min_value=1, max_value=24, value=8)
+    # ⛔️ removed forecast_periods from sidebar
 
 # --- Model Selection ---
 models = ["SARIMAX", "Prophet", "Exponential Smoothing"]
@@ -60,6 +60,14 @@ for i, model in enumerate(models):
             st.rerun()
 
 st.markdown("---")
+
+# 👉 NEW: forecast periods input in the main area (same as one_model.py)
+forecast_periods = st.number_input(
+    "Enter forecast periods (months):",
+    min_value=1, max_value=24,
+    value=st.session_state.get("cmp_periods", 8),
+    key="cmp_periods"
+)
 
 selected_models = st.session_state.selected_models
 
@@ -85,13 +93,10 @@ def _get_df_from_res(res: dict, airline_key: str) -> pd.DataFrame:
 
 def _render_sarimax(airline_key: str, periods: int):
     res = Airline(airline_key, periods, model="SARIMAX")
-
-    # ✅ robust against older Airline() payloads
     df = _get_df_from_res(res, airline_key)
     forecast_summary = res["Forecast"].copy()
     metrics = res.get("Metrics", {})
     fitted_values = res.get("Fitted", None)
-
 
     df["Date"] = pd.to_datetime(df["Date"])
     forecast_summary["Date"] = pd.to_datetime(forecast_summary["Date"])
@@ -125,22 +130,18 @@ def _render_sarimax(airline_key: str, periods: int):
     return fig, metrics, table_df
 
 def _render_prophet(airline_key: str, periods: int):
-    # Airline() → Prophet branch returns forecast with Date, yhat, yhat_lower, yhat_upper + metrics
     res = Airline(airline_key, periods, model="PROPHET")
     df_hw = _get_df_from_res(res, airline_key)
     forecast_summary = res["Forecast"].copy()
     metrics = res["Metrics"]
 
-    # Actual data for plotting
     df, _, _ = sensitivity_index(airline_key)
     df["Date"] = pd.to_datetime(df["Date"])
     forecast_summary["Date"] = pd.to_datetime(forecast_summary["Date"])
 
-    # Fitted series from in-sample yhat
     fitted_map = forecast_summary.set_index("Date")["yhat"]
     fitted_values = df["Date"].map(fitted_map)
 
-    # Only future part for red forecast line
     future_mask = forecast_summary["Date"] > df["Date"].max()
     fc_future = forecast_summary.loc[future_mask].iloc[:periods].copy()
     fc_future["Forecasted Price"] = fc_future["yhat"]
@@ -168,13 +169,11 @@ def _render_prophet(airline_key: str, periods: int):
                       legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01),
                       height=500)
 
-    # Table shaped like SARIMAX/HW
     table_df = fc_future[["Date", "Forecasted Price"]].copy()
     table_df["Date"] = table_df["Date"].dt.date
     return fig, metrics, table_df
 
 def _render_holt_winters(airline_key: str, periods: int):
-    # Airline() → HW branch returns DF, Forecast(Date+Forecasted Price), Metrics, Trend/Seasonal
     res = Airline(airline_key, periods, model="HOLT-WINTERS")
     df_hw = _get_df_from_res(res, airline_key)
     forecast_summary = res["Forecast"].copy()
@@ -185,7 +184,6 @@ def _render_holt_winters(airline_key: str, periods: int):
     df_hw["Date"] = pd.to_datetime(df_hw["Date"])
     forecast_summary["Date"] = pd.to_datetime(forecast_summary["Date"])
 
-    # Refit locally to get a fitted line (no changes to your HW function)
     ts = pd.Series(df_hw["Price"].values, index=df_hw["Date"])
     hw_fit = ExponentialSmoothing(ts, trend=trend_type, seasonal=seasonal_type, seasonal_periods=12).fit(optimized=True)
     fitted_values = hw_fit.fittedvalues
